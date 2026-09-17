@@ -381,11 +381,12 @@ GitHub. Other approved images are not queried.
 the cluster module takes the page CSS as a parameter rather than importing it,
 so the same rendering serves the published page and the preview artifact.
 
-**Colors live in one place.** The `:root` block at the top of `CSS` in
-`generate_report.py` holds every color either page uses; the cluster panel
-references those tokens rather than declaring its own. Nothing writes a color
-into markup — sparkline direction is a class, not a `fill` attribute. Restyling
-is an edit to that block.
+**Shared page styling lives in one place.** The `CSS` block in
+`generate_report.py` provides the palette and oval page navigation used by the
+KPI overview, cluster-utilization, and image-status pages. The cluster and image
+renderers reference those shared styles rather than recreating them. Nothing
+writes a color into markup — sparkline direction is a class, not a `fill`
+attribute. Restyling the shared shell is an edit to that block.
 
 The `.azure_env` / `.azure_base` split exists so a new KPI domain inherits Azure
 authentication, runner routing and retry policy without re-deriving them, and so

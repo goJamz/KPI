@@ -20,27 +20,6 @@ from generate_report import CSS  # noqa: E402
 
 
 IMAGE_STATUS_CSS = """
-.image-page-nav {
-  display: flex;
-  justify-content: center;
-  gap: .45rem;
-  margin-top: .8rem;
-}
-.image-page-nav a, .image-page-nav [aria-current="page"] {
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  padding: .35rem .75rem;
-  font-size: .82rem;
-  font-weight: 700;
-  text-decoration: none;
-}
-.image-page-nav a { color: var(--accent); background: var(--paper); }
-.image-page-nav a:hover { background: var(--surface-soft); }
-.image-page-nav [aria-current="page"] {
-  color: var(--on-dark);
-  background: var(--header);
-  border-color: var(--header);
-}
 .image-status-panel { max-width: 70rem; margin: 0 auto; }
 .image-status-summary { margin-bottom: 1rem; color: var(--ink-muted); }
 .image-status-list {
@@ -190,7 +169,7 @@ def render_page(report: dict | None, cluster_available: bool) -> str:
 <body>
   <header>
     <h1>Image Status</h1>
-    <nav class="image-page-nav" aria-label="KPI pages">
+    <nav class="kpi-page-nav" aria-label="KPI pages">
       <a href="index.html">KPI Overview</a>
       {cluster_link}
       <span aria-current="page">Image Status</span>

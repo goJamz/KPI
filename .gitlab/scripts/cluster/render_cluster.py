@@ -151,10 +151,6 @@ PANEL_CSS = """
 .cluster-more { display: inline-block; font-size: .84rem; font-weight: 700;
   color: var(--accent); text-decoration: none; }
 .cluster-more:hover { text-decoration: underline; }
-.cluster-nav { font-size: .82rem; }
-.cluster-nav a { color: var(--accent); text-decoration: none; font-weight: 600; }
-.cluster-nav a:hover { text-decoration: underline; }
-
 /* ── Pills ─────────────────────────────────────────────────── */
 .pill { display: inline-block; padding: .05rem .45rem; border-radius: 10px;
   font-size: .68rem; font-weight: 600; white-space: nowrap; }
@@ -1297,9 +1293,11 @@ def render_cluster_page(reports: dict, css: str = "", generated: str = "",
     module is imported by generate_report.py and must never import it back.
     """
     panel = render_cluster_panel(reports)
-    nav = (f'<p class="cluster-nav"><a href="{escape(back_href)}">&larr; Cost by '
-           f'portfolio</a> · <a href="{escape(image_status_href)}">Image status '
-           '&rarr;</a></p>' if back_href else
+    nav = (f'<nav class="kpi-page-nav" aria-label="KPI pages">'
+           f'<a href="{escape(back_href)}">KPI Overview</a>'
+           '<span aria-current="page">Cluster Utilization</span>'
+           f'<a href="{escape(image_status_href)}">Image Status</a></nav>'
+           if back_href else
            '<p class="period-str">Preview - not published to the dashboard</p>')
     gen = f'\n    <p class="generated">Generated: {escape(generated)}</p>' if generated else ""
     return f"""<!DOCTYPE html>

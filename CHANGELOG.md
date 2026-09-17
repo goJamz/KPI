@@ -87,6 +87,10 @@ dashboard.
 
 ### Changed
 
+- **Published-page navigation is visually consistent.** KPI Overview, Cluster
+  Utilization, and Image Status now use the same oval-button navigation, label
+  order, and selected-page treatment. Archive and cluster-preview navigation
+  remain unchanged.
 - **Cost history is sharded per week.** One file per environment per ISO Monday
   (`cost_history/<env>/<yyyy-mm-dd>.json`) instead of a single per-environment
   file. The filename is the week key, which is what makes resume a set

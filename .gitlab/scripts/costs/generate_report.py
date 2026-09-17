@@ -1839,6 +1839,34 @@ body {
 header { margin-bottom: 28px; text-align: center; }
 header h1 { font-size: 1.75rem; color: var(--ink-strong); }
 header p  { color: var(--ink-muted); font-size: 0.9rem; margin-top: 4px; }
+.kpi-page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: .45rem;
+  margin-top: .8rem;
+}
+.kpi-page-nav a, .kpi-page-nav [aria-current="page"] {
+  display: inline-block;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: .35rem .75rem;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+}
+.kpi-page-nav a { color: var(--accent); background: var(--paper); }
+.kpi-page-nav a:hover { background: var(--surface-soft); }
+.kpi-page-nav a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.kpi-page-nav [aria-current="page"] {
+  color: var(--on-dark);
+  background: var(--header);
+  border-color: var(--header);
+}
 h2 {
   font-size: 1.2rem;
   color: var(--ink-strong);
@@ -3070,24 +3098,25 @@ def generate_html(reports: list, missing_environments=None,
                      '<a href="../../index.html">&larr; Current period</a></p>'
                      if archive else "")
 
-    # The two pages describe the same money at different granularities, so the
-    # link between them is the layout. An archive keeps its own back-link
-    # instead: cluster data is current state and has no place in a closed record.
-    # Spaced by the caller so an absent panel leaves the page byte-identical
-    # to one built before it existed, which is what makes the regression check
-    # on the cost page meaningful.
+    # The current KPI pages share one navigation treatment so they read as one
+    # application. An archive keeps its own back-link instead: cluster and image
+    # status are current state and have no place in a closed record. Spaced by
+    # the caller so an absent panel leaves the page byte-identical to one built
+    # before it existed, which is what makes the regression check on the cost
+    # page meaningful.
     cluster_block = f"\n  {cluster_strip}" if cluster_strip and not archive else ""
 
     page_nav = archive_nav
     if not archive:
         cluster_link = (
-            f'<a href="{escape(cluster_href)}">Cluster utilization &rarr;</a> · '
+            f'<a href="{escape(cluster_href)}">Cluster Utilization</a>'
             if cluster_strip else ""
         )
         page_nav = (
-            '\n    <p class="cluster-nav">'
+            '\n    <nav class="kpi-page-nav" aria-label="KPI pages">'
+            '<span aria-current="page">KPI Overview</span>'
             f'{cluster_link}'
-            '<a href="image-status.html">Image status &rarr;</a></p>'
+            '<a href="image-status.html">Image Status</a></nav>'
         )
 
     prov = forecast_provenance(reports)
