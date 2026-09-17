@@ -6,7 +6,10 @@ __pycache__/
 # Local pipeline output, produced by the jobs in CI and by local test runs.
 cost_reports/
 resource_reports/
+image_status_reports/
 cost_history/
 resource_history/
 public/
 magpie/
+.agents
+.codex

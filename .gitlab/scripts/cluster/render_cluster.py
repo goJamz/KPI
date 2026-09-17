@@ -1297,11 +1297,9 @@ def render_cluster_page(reports: dict, css: str = "", generated: str = "",
     module is imported by generate_report.py and must never import it back.
     """
     panel = render_cluster_panel(reports)
-    nav = (f'<nav class="page-nav" aria-label="KPI pages">'
-           f'<a href="{escape(back_href)}">KPI Overview</a>'
-           '<span aria-current="page">Cluster Utilization</span>'
-           f'<a href="{escape(image_status_href)}">Image Status</a></nav>'
-           if back_href else
+    nav = (f'<p class="cluster-nav"><a href="{escape(back_href)}">&larr; Cost by '
+           f'portfolio</a> · <a href="{escape(image_status_href)}">Image status '
+           '&rarr;</a></p>' if back_href else
            '<p class="period-str">Preview - not published to the dashboard</p>')
     gen = f'\n    <p class="generated">Generated: {escape(generated)}</p>' if generated else ""
     return f"""<!DOCTYPE html>

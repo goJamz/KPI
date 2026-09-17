@@ -21,6 +21,8 @@ being published.
   │  azure_cost_analysis   × dev/test/prod   │   Cost Management API
   │  resource_scan         × dev/test/prod   │   Resource Graph + Monitor
   │  cluster_scan          × dev/test/prod   │   AKS + Kubernetes + Prometheus
+  │  pipeline_metrics_scan                   │   GitLab CI API
+  │  image_status_scan                       │   GitLab registry + upstream API
   └──────────────────────┬───────────────────┘
                          │  artifacts
   ┌──────────────── publish ─────────────────┐
@@ -45,7 +47,8 @@ show the full period even though each run only measures one week.
 
 The site is three pages. `index.html` reports cost by portfolio and project;
 `cluster.html` reports what the Kubernetes clusters cost and how much of that is
-in use; and `image-status.html` currently displays the static result `Pass`.
+in use; and `image-status.html` compares each configured approved image's
+highest numbered registry tag with its latest stable upstream release.
 Kubernetes is not a separate subject — it is roughly a quarter of the bill and
 is already inside the portfolio figures, so the cluster page is a drill-down on
 the first. A navigation row links the three live pages.
@@ -136,6 +139,7 @@ mapping is needed in the YAML.
 | Variable | Default | Description |
 |---|---|---|
 | `AI2C_API_RWA` | — | Bot PAT, set at group/instance level. Used to read and write the `data` branch through the GitLab Commits API, which bypasses push rules and needs no GPG signing. |
+| `GITHUB_TOKEN` | — | Optional token used by image-status checks to raise the GitHub API rate limit. |
 | `JWCC_POP_START` | previous 1 Dec | Period of performance boundaries — see below. Set in `.gitlab-ci.yml`, not in CI/CD settings. |
 | `SMTP_HOST` | — | SMTP server hostname |
 | `SMTP_PORT` | `25` | SMTP port |
@@ -262,6 +266,7 @@ The pipeline is built so that partial data still produces a page.
 | **Every** cost collector | The page job fails and publishes nothing, leaving the last good page in place. An empty shell is worse than a stale page. |
 | A **backfill window** | Logged and skipped; the run continues and reports attempted/succeeded/failed at the end. |
 | A **partial backfill** | Exit `75`, job amber, pipeline continues, persist job can still run. |
+| An **image version check** | Its card says *Check unavailable* and includes the failed source. Other images still render. |
 
 ### The status contract
 
@@ -327,6 +332,8 @@ run has nothing to say, so it declines to overwrite the last page that did.
     resources/scan.yml              resource collector matrix
     cluster/scan.yml                cluster collector matrix
     cluster/preview.yml             cluster page as a reviewable artifact
+    images/status.yml               approved-image version collector
+    pipeline/scan.yml               GitLab CI activity collector
     page/kpi_pages.yml              history merge, render, persist
   scripts/
     common/                         shared across domains
@@ -341,7 +348,7 @@ run has nothing to say, so it declines to overwrite the last page that did.
       backfill_windows.py           window generation and resume
       update_history.py             merge reports into history shards
       archive_periods.py            freeze and re-render closed periods
-      generate_report.py            the dashboard, cluster and image-status pages
+      generate_report.py            the dashboard and cluster page
       send_notification.py          the email
     resources/
       scan_resources.py             the resource collector
@@ -349,9 +356,26 @@ run has nothing to say, so it declines to overwrite the last page that did.
       scan_cluster.py               the cluster collector
       prom.py                       Prometheus access over port-forward
       render_cluster.py             the cluster panel, summary and page
+    images/
+      collect_image_status.py       registry/upstream version comparison
+      image_sources.json            images and their release authorities
+      render_image_status.py        standalone image-status page renderer
     pipeline/
       collect_gitlab_metrics.py     concurrent GitLab CI activity collector
 ```
+
+### Image status configuration
+
+Image checks are declared in
+`.gitlab/scripts/images/image_sources.json`. Each entry identifies the owning
+GitLab project and registry repository ID, plus the authoritative upstream
+release source. The collector reads every registry tag and compares the highest
+purely numeric version; a tag named `latest`, prerelease suffixes, and other
+nonnumeric tags are ignored.
+
+Only Traefik is currently configured and in scope. Its registry repository ID
+is `4832`, and its stable upstream release comes from `traefik/traefik` on
+GitHub. Other approved images are not queried.
 
 `generate_report.py` imports `render_cluster.py`, never the other way round:
 the cluster module takes the page CSS as a parameter rather than importing it,

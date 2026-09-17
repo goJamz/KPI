@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Traefik",
+    "image": "registry.cdso.army.mil/cdso/containers/approved-base/traefik",
+    "registry_project": "cdso/containers/approved-base",
+    "registry_repository_id": 4832,
+    "registry_url": "https://code.cdso.army.mil/cdso/containers/approved-base/container_registry/4832",
+    "source_url": "https://code.cdso.army.mil/cdso/containers/base/traefick",
+    "upstream": {
+      "type": "github_latest_release",
+      "repository": "traefik/traefik"
+    }
+  }
+]

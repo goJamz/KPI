@@ -105,6 +105,9 @@ include:
   - local: .gitlab/jobs/pipeline/scan.yml
     rules:
       - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/images/status.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
   - local: .gitlab/jobs/page/kpi_pages.yml
     rules:
       - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'

@@ -38,6 +38,9 @@ kpi_pages:
     - job: pipeline_metrics_scan
       artifacts: true
       optional: true
+    - job: image_status_scan
+      artifacts: true
+      optional: true
   script:
     - python3 .gitlab/scripts/common/fetch_history.py
     # Frozen periods live under their own root on the data branch. fetch and
@@ -49,6 +52,9 @@ kpi_pages:
     # every run, so archive pages are re-rendered here rather than persisted.
     - python3 .gitlab/scripts/costs/archive_periods.py
     - python3 .gitlab/scripts/costs/generate_report.py
+    # This new page must not stop the established dashboard from publishing if
+    # its renderer has an unexpected failure.
+    - python3 .gitlab/scripts/images/render_image_status.py || echo "[WARN] Image status page render failed; existing pages are unaffected"
     - python3 .gitlab/scripts/common/persist_history.py
     - HISTORY_DIR=archive python3 .gitlab/scripts/common/persist_history.py
     # generate_report.py writes public/data/<environment>.json itself — the

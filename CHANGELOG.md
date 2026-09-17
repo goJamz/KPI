@@ -18,6 +18,11 @@ dashboard.
 
 ### Added
 
+- **Approved-image freshness page.** A collector compares the highest numbered
+  tag in each configured GitLab container registry repository with its latest
+  stable upstream release. The first configured check is Traefik. The dashboard
+  shows current and available versions, marks updates in red, and reports API
+  failures as unavailable rather than as a pass.
 - **Resumable cost backfill.** The backfill derives its target weeks from the
   JWCC period start, subtracts the weeks already present on the `data` branch,
   and processes only the difference — so a run that dies resumes where it
