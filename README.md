@@ -43,12 +43,12 @@ gathers every collector's artifacts, merges them into the history held on the
 Because history lives on a branch rather than in artifacts, the dashboard can
 show the full period even though each run only measures one week.
 
-The site is two pages. `index.html` reports cost by portfolio and project;
+The site is three pages. `index.html` reports cost by portfolio and project;
 `cluster.html` reports what the Kubernetes clusters cost and how much of that is
-in use. They are not two subjects — Kubernetes is roughly a quarter of the bill
-and is already inside the portfolio figures, so the second page is a drill-down
-on the first. `index.html` carries a short summary of it with a link across, and
-each page links back to the other.
+in use; and `image-status.html` currently displays the static result `Pass`.
+Kubernetes is not a separate subject — it is roughly a quarter of the bill and
+is already inside the portfolio figures, so the cluster page is a drill-down on
+the first. A navigation row links the three live pages.
 
 `index.html` runs: important information, cost by portfolio, the Kubernetes
 summary, flagged resources, previous periods. The clusters section follows the
@@ -341,7 +341,7 @@ run has nothing to say, so it declines to overwrite the last page that did.
       backfill_windows.py           window generation and resume
       update_history.py             merge reports into history shards
       archive_periods.py            freeze and re-render closed periods
-      generate_report.py            the dashboard, and the cluster page
+      generate_report.py            the dashboard, cluster and image-status pages
       send_notification.py          the email
     resources/
       scan_resources.py             the resource collector

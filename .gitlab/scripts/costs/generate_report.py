@@ -1838,6 +1838,41 @@ body {
 header { margin-bottom: 28px; text-align: center; }
 header h1 { font-size: 1.75rem; color: var(--ink-strong); }
 header p  { color: var(--ink-muted); font-size: 0.9rem; margin-top: 4px; }
+.page-nav {
+  display: flex;
+  justify-content: center;
+  gap: .45rem;
+  margin-top: .8rem;
+}
+.page-nav a, .page-nav [aria-current="page"] {
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: .35rem .75rem;
+  font-size: .82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.page-nav a { color: var(--accent); background: var(--paper); }
+.page-nav a:hover { background: var(--surface-soft); }
+.page-nav [aria-current="page"] {
+  color: var(--on-dark);
+  background: var(--header);
+  border-color: var(--header);
+}
+.image-status-panel {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.image-status-result {
+  color: var(--good-strong);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
 h2 {
   font-size: 1.2rem;
   color: var(--ink-strong);
@@ -2365,7 +2400,7 @@ def render_pipeline_metrics_panel(report: dict | None) -> str:
     if not report:
         return (
             '<section class="pipeline-metrics">'
-            '<h2>AI2C GitLab CI</h2>'
+            '<h2>Piepline Performance</h2>'
             '<p class="period-meta">Not collected this run.</p>'
             '</section>'
         )
@@ -2440,7 +2475,7 @@ def render_pipeline_metrics_panel(report: dict | None) -> str:
 
     return (
         '<section class="pipeline-metrics">'
-        '<h2>AI2C GitLab CI</h2>'
+        '<h2>Piepline Performance</h2>'
         f'<p class="period-meta">{scope} group activity for the last complete ISO week, '
         f'{escape(str(period_start))} to {escape(str(period_end))}. '
         f'{projects_scanned} of {projects_total} project(s) were scanned. '
@@ -2961,6 +2996,37 @@ def render_system_content(reports: list, period_str: str, table_id: str = "overv
     return f"{summary_cards}\n{overview_table}"
 
 
+def render_image_status_page(generated: str, cluster_available: bool) -> str:
+    cluster_link = (
+        '<a href="cluster.html">Cluster Utilization</a>'
+        if cluster_available else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Expedition-0 KPI Report - Image Status</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128202;</text></svg>">
+  <style>{CSS}</style>
+</head>
+<body>
+  <header>
+    <h1>Image Status</h1>
+    <nav class="page-nav" aria-label="KPI pages">
+      <a href="index.html">KPI Overview</a>
+      {cluster_link}
+      <span aria-current="page">Image Status</span>
+    </nav>
+    <p class="generated">Generated: {escape(generated)}</p>
+  </header>
+  <main class="image-status-panel">
+    <p class="image-status-result">Pass</p>
+  </main>
+</body>
+</html>"""
+
+
 def generate_html(reports: list, missing_environments=None,
                   monthly_history: dict | None = None,
                   env_monthly: dict | None = None, jwcc_pop: dict | None = None,
@@ -3078,10 +3144,18 @@ def generate_html(reports: list, missing_environments=None,
     cluster_block = f"\n  {cluster_strip}" if cluster_strip and not archive else ""
 
     page_nav = archive_nav
-    if cluster_strip and not archive:
-        page_nav = ('\n    <p class="cluster-nav">'
-                    f'<a href="{escape(cluster_href)}">'
-                    'Cluster utilization &rarr;</a></p>')
+    if not archive:
+        cluster_link = (
+            f'<a href="{escape(cluster_href)}">Cluster Utilization</a>'
+            if cluster_strip else ""
+        )
+        page_nav = (
+            '\n    <nav class="page-nav" aria-label="KPI pages">'
+            '<span aria-current="page">KPI Overview</span>'
+            f'{cluster_link}'
+            '<a href="image-status.html">Image Status</a>'
+            '</nav>'
+        )
 
     prov = forecast_provenance(reports)
     if not prov["known"]:
@@ -3546,6 +3620,16 @@ if __name__ == "__main__":
     out.write_text(html, encoding="utf-8")
 
     print(f"[INFO] Dashboard written to {out}")
+
+    image_status_out = public_dir / "image-status.html"
+    image_status_out.write_text(
+        render_image_status_page(
+            generated=str(reports[0].get("report_generated_utc", "")),
+            cluster_available=bool(cluster_strip),
+        ),
+        encoding="utf-8",
+    )
+    print(f"[INFO] Image status page written to {image_status_out}")
 
     # The page links to data/<environment>.json for each environment. Those used
     # to be copied straight from cost_history/, but sharding moved the files
