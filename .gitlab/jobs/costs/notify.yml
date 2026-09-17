@@ -1,0 +1,28 @@
+# -----------------------------------------------------------------------------
+# Send HTML summary email with link to the Pages dashboard
+# -----------------------------------------------------------------------------
+kpi_notify:
+  stage: notify
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+  variables:
+    PUBLISH_ENVIRONMENT: "prod"
+  needs:
+    - job: azure_cost_analysis
+      artifacts: true
+    # Needed so the email can name resource scans that failed. optional covers
+    # the collector being skipped; allow_failure on the collector covers it
+    # failing.
+    - job: resource_scan
+      artifacts: true
+      optional: true
+    - job: kpi_pages
+      artifacts: false
+  script:
+    - python3 .gitlab/scripts/costs/send_notification.py
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual

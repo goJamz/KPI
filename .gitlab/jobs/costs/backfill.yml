@@ -1,0 +1,195 @@
+# -----------------------------------------------------------------------------
+# [ONE-TIME] Backfill: populate history from the JWCC POP date (Dec 1 of the
+# prior year) to today. Trigger manually once after the data branch is set up.
+# Never runs on schedule.
+#
+# Each matrix instance loops query_azure_costs.sh once per weekly window going
+# back to Dec 1 of the previous year. Forecast queries are skipped automatically
+# when OVERRIDE_CURRENT_START is set.
+#
+# Windows are whole ISO weeks (Monday-Sunday), matching what the weekly
+# scheduled run produces, so a backfilled week and a scheduled one are
+# interchangeable and the week's Monday identifies it.
+#
+# Optional pipeline variables, settable when running the pipeline manually:
+#   BACKFILL_MAX_WINDOWS  process only the first N windows — use a small value
+#                         to smoke-test a change without a full multi-hour run
+#   BACKFILL_START        earliest date to cover (default: Dec 1, prior year)
+#   BACKFILL_END          latest date to cover (default: last complete week)
+#   BACKFILL_FORCE        re-query weeks that already have a shard
+#   BACKFILL_CHECKPOINT_EVERY  commit completed weeks to the data branch every
+#                         N windows (default 5, 0 disables)
+#
+# The job is resumable. It fetches the existing history first and queries only
+# the weeks that have no shard yet, so a run that fails partway can simply be
+# started again and will pick up where it stopped — provided the persist job
+# ran to commit what did complete.
+#
+# Windows are independent: a window that fails is logged and skipped, and the
+# loop continues. Reports for every window that did complete stay in
+# cost_reports/ and are uploaded as artifacts regardless of the job's outcome,
+# so a partial run is never thrown away.
+#
+# Exit codes:
+#   0   every window completed
+#   75  some windows completed, some failed — the job is marked as an allowed
+#       failure so azure_cost_backfill_persist can still collect the artifacts
+#   1   no window completed at all, or setup failed
+# -----------------------------------------------------------------------------
+azure_cost_backfill:
+  extends: .azure_base
+  parallel:
+    matrix:
+      - ENVIRONMENT: "dev"
+      - ENVIRONMENT: "test"
+      - ENVIRONMENT: "prod"
+
+  # A partial run is a real outcome, not a crash: the job goes amber, the
+  # pipeline continues, and the persist job can still harvest what completed.
+  allow_failure:
+    exit_codes:
+      - 75
+
+  # Re-running a multi-hour backfill from scratch after a timeout costs another
+  # multi-hour slot and produces nothing the first attempt did not already have.
+  retry:
+    max: 0
+
+  script:
+    - |
+      set -u
+
+      WINDOWS=/tmp/backfill_windows.txt
+
+      # What is already on the data branch decides what still needs querying, so
+      # a failure here is not survivable: carrying on would re-query every week
+      # that is already recorded and silently spend hours doing it. An empty or
+      # absent data branch is fine and reports itself as such.
+      if ! python3 .gitlab/scripts/common/fetch_history.py; then
+        echo "[ERROR] Could not read existing history — cannot determine what is"
+        echo "[ERROR] left to backfill. Refusing to re-query the whole range."
+        exit 1
+      fi
+
+      # Exit 3 means the range is already complete, which is a success, not a
+      # failure. Exit 1 means the range itself is wrong. Captured with `||` so
+      # the surrounding shell options are left as they are.
+      WINDOW_RC=0
+      python3 .gitlab/scripts/costs/backfill_windows.py > "${WINDOWS}" || WINDOW_RC=$?
+
+      if [ "${WINDOW_RC}" -eq 3 ]; then
+        echo "[INFO] ${ENVIRONMENT}: nothing to backfill — every week in range is "
+        echo "[INFO] already recorded. Set BACKFILL_FORCE=1 to re-query anyway."
+        exit 0
+      elif [ "${WINDOW_RC}" -ne 0 ]; then
+        echo "[ERROR] Could not determine which windows to process."
+        exit 1
+      fi
+
+      TOTAL=$(wc -l < "${WINDOWS}" | tr -d ' ')
+      echo "[INFO] ${ENVIRONMENT}: ${TOTAL} window(s) to process"
+
+      echo "[INFO] Windows to process (newest first):"
+      awk '{ printf "[INFO]   %s -> %s\n", $1, $2 }' "${WINDOWS}"
+
+      SUCCEEDED=0
+      FAILED=0
+      FAILED_WINDOWS=""
+      INDEX=0
+      CHECKPOINT_EVERY="${BACKFILL_CHECKPOINT_EVERY:-5}"
+
+      # Commit what has completed so far. Only weeks that actually changed are
+      # sent, so this stays cheap however long the history gets. Anything
+      # committed here is visible to the next run's resume, which is the point:
+      # without it, a job that dies before the persist stage loses everything
+      # it gathered, however far it got.
+      checkpoint() {
+        echo "[INFO] Checkpoint after window ${INDEX}/${TOTAL} — committing completed weeks"
+        if python3 .gitlab/scripts/costs/update_history.py \
+           && python3 .gitlab/scripts/common/persist_history.py; then
+          echo "[INFO] Checkpoint saved."
+        else
+          # A failed checkpoint costs only the weeks since the last one; the
+          # windows themselves are still in cost_reports/ and in the artifact.
+          echo "[WARN] Checkpoint failed — continuing; work so far is still in the artifact."
+        fi
+      }
+
+      # Reading from a file rather than a pipe keeps the loop in the current
+      # shell, so the counters below survive past the last iteration.
+      while read -r cur_start cur_end pri_start pri_end; do
+        INDEX=$((INDEX + 1))
+        echo "============================================================"
+        echo "[INFO] Window ${INDEX}/${TOTAL}: ${cur_start} -> ${cur_end}"
+        echo "============================================================"
+
+        export OVERRIDE_CURRENT_START="$cur_start"
+        export OVERRIDE_CURRENT_END="$cur_end"
+        export OVERRIDE_PRIOR_START="$pri_start"
+        export OVERRIDE_PRIOR_END="$pri_end"
+
+        if bash .gitlab/scripts/costs/query_azure_costs.sh; then
+          SUCCEEDED=$((SUCCEEDED + 1))
+        else
+          FAILED=$((FAILED + 1))
+          FAILED_WINDOWS="${FAILED_WINDOWS} ${cur_start}"
+          echo "[WARN] Window ${cur_start} -> ${cur_end} failed — continuing with the next window."
+        fi
+
+        if [ "${CHECKPOINT_EVERY}" -gt 0 ] \
+           && [ $((INDEX % CHECKPOINT_EVERY)) -eq 0 ] \
+           && [ "${INDEX}" -lt "${TOTAL}" ]; then
+          checkpoint
+        fi
+      done < "${WINDOWS}"
+
+      # Final checkpoint so a completed run needs no separate persist step.
+      if [ "${CHECKPOINT_EVERY}" -gt 0 ] && [ "${SUCCEEDED}" -gt 0 ]; then
+        checkpoint
+      fi
+
+      echo "============================================================"
+      echo "[INFO] Backfill summary for ${ENVIRONMENT}"
+      echo "[INFO]   windows attempted : ${TOTAL}"
+      echo "[INFO]   completed         : ${SUCCEEDED}"
+      echo "[INFO]   failed            : ${FAILED}"
+      if [ "${FAILED}" -gt 0 ]; then
+        echo "[INFO]   failed windows    :${FAILED_WINDOWS}"
+      fi
+      echo "[INFO] Reports written: $(ls -1 cost_reports/*.json 2>/dev/null | wc -l | tr -d ' ')"
+      echo "============================================================"
+
+      if [ "${FAILED}" -eq 0 ]; then
+        exit 0
+      elif [ "${SUCCEEDED}" -gt 0 ]; then
+        echo "[WARN] Partial backfill — ${SUCCEEDED} of ${TOTAL} window(s) completed."
+        echo "[WARN] Completed windows are preserved in the job artifacts."
+        exit 75
+      else
+        echo "[ERROR] No window completed."
+        exit 1
+      fi
+
+  rules:
+    - when: manual
+
+azure_cost_backfill_persist:
+  stage: publish
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+  variables:
+    PUBLISH_ENVIRONMENT: "prod"
+  needs:
+    - job: azure_cost_backfill
+      artifacts: true
+  script:
+    # Fetching first makes this idempotent: update_history only rewrites weeks
+    # whose content actually differs, so re-running after the backfill has
+    # already checkpointed commits nothing rather than re-sending the history.
+    - python3 .gitlab/scripts/common/fetch_history.py
+    - python3 .gitlab/scripts/costs/update_history.py
+    - python3 .gitlab/scripts/common/persist_history.py
+  rules:
+    - when: manual

@@ -1,0 +1,46 @@
+# -----------------------------------------------------------------------------
+# Resource KPI collector — idle, orphaned and underutilized resources.
+#
+# Independent of the cost collector. It is deliberately absent from the backfill
+# pipeline: these are point-in-time facts about the subscription with no
+# relationship to a cost reporting window, and running them per window meant
+# scanning 38 times per environment for identical data.
+#
+# allow_failure means a scan that cannot complete does not stop cost data being
+# gathered or the page being published. The page distinguishes "scanned, found
+# nothing" from "did not run" using the status each report carries, so an absent
+# collector does not read as an all-clear.
+# -----------------------------------------------------------------------------
+resource_scan:
+  extends: .azure_env
+  stage: analysis
+
+  parallel:
+    matrix:
+      - ENVIRONMENT: "dev"
+      - ENVIRONMENT: "test"
+      - ENVIRONMENT: "prod"
+
+  allow_failure: true
+
+  variables:
+    # Selects the domain for the shared history scripts, on disk and on the
+    # data branch alike.
+    HISTORY_DIR: resource_history
+
+  before_script:
+    - source .gitlab/scripts/common/azure_login.sh
+    - az extension add --name resource-graph --yes
+
+  script:
+    - python3 .gitlab/scripts/resources/scan_resources.py
+    - python3 .gitlab/scripts/common/persist_history.py
+
+  artifacts:
+    name: "resource-scan-${ENVIRONMENT}-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - resource_reports/
+    expire_in: 90 days
+    # Preserve findings even when a scan fails, so the page can still show what
+    # did complete and say what did not.
+    when: always

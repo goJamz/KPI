@@ -1,0 +1,39 @@
+# -----------------------------------------------------------------------------
+# Cluster panel preview — the panel as it will look on the dashboard, published
+# as a job artifact rather than to Pages.
+#
+# Writes cluster_preview/index.html, not public/, so it cannot reach GitLab
+# Pages by accident. Open it from the job artifacts to review the panel.
+#
+# Kept now that the panel is published: it renders the same page through the
+# same function, so a change to the panel can be reviewed from an artifact
+# before the branch it is on ever publishes anything.
+# -----------------------------------------------------------------------------
+cluster_preview:
+  stage: publish
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+
+  variables:
+    PUBLISH_ENVIRONMENT: "prod"
+
+  # optional so a skipped collector does not block the preview; allow_failure on
+  # the collector covers one that ran and failed. Matches kpi_pages.
+  needs:
+    - job: cluster_scan
+      artifacts: true
+      optional: true
+
+  allow_failure: true
+
+  script:
+    - python3 .gitlab/scripts/cluster/render_cluster.py
+
+  artifacts:
+    name: "cluster-preview-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - cluster_preview/
+    expire_in: 30 days
+    when: always

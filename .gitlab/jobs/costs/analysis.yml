@@ -1,0 +1,20 @@
+# -----------------------------------------------------------------------------
+# Query cost data — runs in parallel for each subscription environment
+# Adjust the matrix entries to match your actual ENVIRONMENT combos
+# -----------------------------------------------------------------------------
+azure_cost_analysis:
+  extends: .azure_base
+  parallel:
+    matrix:
+      - ENVIRONMENT: "dev"
+      - ENVIRONMENT: "test"
+      - ENVIRONMENT: "prod"
+
+  # These are three instances of one job, so without this a single environment
+  # failing takes the page with it — the other two collect fine and nothing is
+  # published. The page already handles a partial run: it names the missing
+  # environments in a banner, excludes them from current-period totals, and
+  # leaves their monthly history alone. If every environment fails there are no
+  # reports at all, and generate_report.py still exits non-zero rather than
+  # replacing the last good page with an empty one.
+  allow_failure: true

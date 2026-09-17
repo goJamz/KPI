@@ -1,0 +1,27 @@
+# -----------------------------------------------------------------------------
+# GitLab pipeline KPI collector — AI2C group CI activity for the last complete
+# ISO week. Runs on a general-purpose runner, not an Azure-scoped one.
+# -----------------------------------------------------------------------------
+pipeline_metrics_scan:
+  stage: analysis
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+
+  variables:
+    PUBLISH_ENVIRONMENT: "prod"
+    HISTORY_DIR: pipeline_history
+
+  allow_failure: true
+
+  script:
+    - python3 .gitlab/scripts/pipeline/collect_gitlab_metrics.py
+    - python3 .gitlab/scripts/common/persist_history.py
+
+  artifacts:
+    name: "pipeline-metrics-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - pipeline_reports/
+    expire_in: 90 days
+    when: always

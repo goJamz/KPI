@@ -1,0 +1,4 @@
+{
+  "extraPaths": [".gitlab/scripts/common"],
+  "reportMissingImports": "error"
+}

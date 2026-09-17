@@ -1,0 +1,48 @@
+# -----------------------------------------------------------------------------
+# Cluster utilization collector — spend against usage.
+#
+# Third KPI domain, same shape as the resource collector: its own job, its own
+# status, allow_failure, its own history root. A cluster that cannot be reached
+# must not stop cost data being gathered or the page being published.
+#
+# Nothing here reaches GitLab Pages. The collector writes an artifact and a
+# history shard; the panel is rendered separately for review. History is
+# persisted from the start even though nothing is published, because utilization
+# cannot be backfilled — unlike cost, nobody keeps it for you.
+# -----------------------------------------------------------------------------
+cluster_scan:
+  extends: .azure_env
+  stage: analysis
+
+  parallel:
+    matrix:
+      - ENVIRONMENT: "dev"
+      - ENVIRONMENT: "test"
+      - ENVIRONMENT: "prod"
+
+  allow_failure: true
+
+  variables:
+    HISTORY_DIR: cluster_history
+    # Escape hatch for UDS Core or platform namespaces the substring hints in
+    # scan_cluster.py fail to match. Empty by default and expected to stay that
+    # way. It is NOT for applications: an application that shares a nodepool
+    # rather than getting its own is still an application, and sharing is a
+    # packing decision for workloads that need no cloud resources of their own.
+    PLATFORM_APP_NAMESPACES: ""
+
+  before_script:
+    - source .gitlab/scripts/common/azure_login.sh
+
+  script:
+    - python3 .gitlab/scripts/cluster/scan_cluster.py
+    - python3 .gitlab/scripts/common/persist_history.py
+
+  artifacts:
+    name: "cluster-scan-expedition-0-${ENVIRONMENT}-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - cluster_reports/
+    expire_in: 90 days
+    # Keep partial output: a failure on one cluster still leaves the others
+    # worth reading.
+    when: always

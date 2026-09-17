@@ -1,0 +1,59 @@
+# =============================================================================
+# Azure job templates — shared scaffolding for every KPI collector
+#
+#   .azure_env   credentials, runner routing and retry policy. Everything a job
+#                needs to talk to one subscription, and nothing about what it
+#                collects. A new collector extends this and supplies its own
+#                stage, script and artifacts.
+#
+#   .azure_base  .azure_env plus the cost collector's stage, script and
+#                artifact paths.
+#
+# The split exists so a second KPI domain does not have to re-derive Azure
+# authentication, runner tags and retry behavior, and so those cannot drift
+# between collectors.
+#
+# GitLab resolves all AZURE_* CI/CD variables from the scoped environment, so
+# no per-subscription variable mapping is needed here.
+#
+# Required pipeline variables (set at trigger time or via schedule):
+#   ENVIRONMENT  — dev | test | prod
+# =============================================================================
+
+# Credentials and runner routing only — no notion of what is being collected.
+.azure_env:
+  # Tells GitLab which environment scope to use when resolving CI/CD variables.
+  # AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, etc. will be injected with the
+  # values set for this specific environment.
+  environment:
+    name: expedition-0-$ENVIRONMENT
+
+  # Routes the job to the ACI runner registered in this subscription/environment.
+  tags:
+    - expedition-0, $ENVIRONMENT
+
+  # Retry once on infrastructure-level failures (network blips, ACI cold starts)
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+
+# The cost collector: environment scaffolding plus what it gathers.
+.azure_base:
+  extends: .azure_env
+  stage: analysis
+
+  before_script:
+    - chmod +x .gitlab/scripts/costs/query_azure_costs.sh
+
+  script:
+    - .gitlab/scripts/costs/query_azure_costs.sh
+
+  artifacts:
+    name: "azure-cost-report-expedition-0-${ENVIRONMENT}-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - cost_reports/
+    expire_in: 90 days
+    # Preserve artifacts even on failure so partial output is not lost
+    when: always

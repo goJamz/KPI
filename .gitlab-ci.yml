@@ -1,0 +1,117 @@
+# =============================================================================
+# Azure KPI Pipeline
+#
+# Renamed from "Cost Analysis": that pipeline gathers resource KPIs as well as
+# cost, and will read as increasingly wrong as more domains are added. Schedules
+# that do not set RUN_TYPE pick up the default and are unaffected; a schedule
+# that sets it explicitly must be updated.
+#
+# Stages:
+#   analysis  — every KPI collector, one job per environment per domain
+#   publish   — collects all artifacts, generates the HTML dashboard on GitLab
+#               Pages, and persists a weekly snapshot to the 'data' branch
+#   notify    — sends brief HTML summary email via SMTP
+#
+# Scheduled weekly via GitLab CI/CD Schedules (Settings > CI/CD > Schedules).
+# Recommended cron: 0 6 * * 1  (Monday 06:00 UTC)
+#
+# CI/CD Variables — environment-scoped (one set per environment):
+# ┌──────────────────────────┬────────────────────────────────────────────────┐
+# │ Variable                 │ Description                                    │
+# ├──────────────────────────┼────────────────────────────────────────────────┤
+# │ AZURE_SUBSCRIPTION_ID    │ Azure subscription ID                          │
+# │ AZURE_TENANT_ID          │ Azure tenant ID                                │
+# │ RUNNER_CLIENT_ID         │ Service principal client ID                    │
+# │ RUNNER_CLIENT_SECRET     │ Service principal client secret  (masked)      │
+# └──────────────────────────┴────────────────────────────────────────────────┘
+#
+# Global CI/CD variables (not environment-scoped):
+# ┌──────────────────────────┬────────────────────────────────────────────────┐
+# │ Variable                 │ Description                                    │
+# ├──────────────────────────┼────────────────────────────────────────────────┤
+# │ SMTP_HOST                │ SMTP server hostname                           │
+# │ SMTP_PORT                │ SMTP port (default: 25)                        │
+# │ SMTP_FROM                │ Sender address                                 │
+# │ SMTP_TO                  │ Comma-separated recipient list                 │
+# │ AI2C_API_RWA             │ Bot PAT — already set at group/instance level; │
+# │                          │ used to read and write the 'data' branch       │
+# └──────────────────────────┴────────────────────────────────────────────────┘
+#
+# JWCC_POP_START is set in the variables block below rather than in CI/CD
+# settings — see the note there.
+#
+# Job definitions live under .gitlab/jobs/ and .gitlab/templates/ — see the
+# include block below for which files apply to which run type.
+# =============================================================================
+
+spec:
+  inputs:
+    RUN_TYPE:
+      default: "KPI Collection"
+      options:
+        - "KPI Collection"
+        - "Cost Backfill"
+      description: >-
+        KPI Collection runs every collector and rebuilds the page.
+        Cost Backfill gathers missing weeks of cost history only.
+
+---
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - when: never
+
+stages:
+  - analysis
+  - publish
+  - notify
+
+variables:
+  # Each date is the day a period of performance began, oldest first. The most
+  # recent rolls forward a year at a time, so this only needs touching when a
+  # boundary actually moves.
+  #
+  # APPEND, never replace. Removing an earlier date does not just change the
+  # current period — it erases the record that the earlier one existed, and
+  # every closed period is then re-derived by subtracting whole years from
+  # whatever is left. Archived periods are frozen on first write, so a wrong
+  # boundary has to be deleted from the data branch by hand.
+  #
+  # Kept here rather than as a CI/CD variable: it is not a secret, it accrues
+  # entries over the life of the contract, and a change to it is worth
+  # reviewing and dating in git history. A project-level CI/CD variable of the
+  # same name still overrides this if one is ever needed.
+  JWCC_POP_START: "2025-12-01,2026-08-30"
+
+include:
+  - local: .gitlab/templates/azure-base.yml
+  - local: .gitlab/jobs/costs/backfill.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "Cost Backfill"'
+  - local: .gitlab/jobs/costs/analysis.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/resources/scan.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/cluster/scan.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/cluster/preview.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/pipeline/scan.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  - local: .gitlab/jobs/page/kpi_pages.yml
+    rules:
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+  # NOTE: kpi_notify has never been included, so the notify stage has never run
+  # and no email has ever been sent. Including it means the weekly *scheduled*
+  # run will start sending to SMTP_TO; on a manual run it stays a manual job.
+  # Remove these three lines to keep email off.
+  # - local: .gitlab/jobs/costs/notify.yml
+  #   rules:
+  #     - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'

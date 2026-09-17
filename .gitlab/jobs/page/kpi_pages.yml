@@ -1,0 +1,61 @@
+# -----------------------------------------------------------------------------
+# Collect all artifacts → generate GitLab Pages HTML dashboard
+#
+# `needs` with artifacts:true on a parallel matrix job downloads all instances'
+# artifacts, so cost_reports/ will contain all 3 JSON files when this runs.
+#
+# This job uses the `pages:` keyword to publish to GitLab Pages.
+# The runner used here does not need Azure credentials — set PUBLISH_ENVIRONMENT
+# to target whichever of your ACI runners can reach the GitLab Pages service
+# (any of them should work).
+# -----------------------------------------------------------------------------
+kpi_pages:
+  stage: publish
+  pages:
+    publish: public
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+  variables:
+    # Set these to the environment of any runner that can run
+    # general-purpose jobs — no Azure cost management access needed here.
+    PUBLISH_ENVIRONMENT: "prod"
+  needs:
+    - job: azure_cost_analysis
+      artifacts: true
+    # optional covers a collector the pipeline rules skipped; allow_failure on
+    # the collector itself covers one that ran and failed.
+    - job: resource_scan
+      artifacts: true
+      optional: true
+    # The cluster panel is a drill-down on the cost figures, not a dependency of
+    # them. Absent artifacts cost the cluster page and its summary strip; the
+    # cost page renders either way.
+    - job: cluster_scan
+      artifacts: true
+      optional: true
+    - job: pipeline_metrics_scan
+      artifacts: true
+      optional: true
+  script:
+    - python3 .gitlab/scripts/common/fetch_history.py
+    # Frozen periods live under their own root on the data branch. fetch and
+    # persist are parameterized by HISTORY_DIR, and both exit cleanly when the
+    # root does not exist yet, so the first run needs no special casing.
+    - HISTORY_DIR=archive python3 .gitlab/scripts/common/fetch_history.py
+    - python3 .gitlab/scripts/costs/update_history.py
+    # Before the page: it links to whatever archives exist. public/ is rebuilt
+    # every run, so archive pages are re-rendered here rather than persisted.
+    - python3 .gitlab/scripts/costs/archive_periods.py
+    - python3 .gitlab/scripts/costs/generate_report.py
+    - python3 .gitlab/scripts/common/persist_history.py
+    - HISTORY_DIR=archive python3 .gitlab/scripts/common/persist_history.py
+    # generate_report.py writes public/data/<environment>.json itself — the
+    # history lives in per-environment directories now, so a flat glob here
+    # matched nothing and failed silently.
+    - mkdir -p public/data
+    - cp cost_reports/*.json public/data/ 2>/dev/null || true
+  # rules:
+  #   - if: $CI_PIPELINE_SOURCE == "schedule"
+  #   - if: $CI_PIPELINE_SOURCE == "web"
