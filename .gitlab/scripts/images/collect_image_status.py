@@ -3,10 +3,12 @@
 The registry side uses GitLab's container registry API and deliberately selects
 the highest numbered tag. A tag literally named ``latest`` is ignored.
 
-Each image declares its upstream source in image_sources.json because an image
-name alone cannot tell us whether its release authority is GitHub, Ubuntu,
-Debian, NVIDIA, or somewhere else. The first supported source is GitHub's
-latest stable release endpoint.
+Each image declares its current-version and upstream release authorities in
+image_sources.json because an image name alone cannot tell us whether its
+release authority is GitHub, npm, Microsoft, NVIDIA, or somewhere else. Most
+images use their highest numbered registry tag as the current version. A
+floating tag can instead run a small command in the approved image to obtain
+the actual installed version.
 
 Environment:
   AI2C_API_RWA or GITLAB_TOKEN  PAT that can read the configured registries
@@ -27,12 +29,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +44,13 @@ from typing import Any
 PER_PAGE = 100
 MAX_ATTEMPTS = 4
 TIMEOUT_SECS = 60
+CONTAINER_TIMEOUT_SECS = 300
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 VERSION_PATTERN = re.compile(r"^[vV]?(\d+(?:\.\d+)*)$")
+RELEASE_VERSION_PATTERN = re.compile(
+    r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
+CUDA_VERSION_PATTERN = re.compile(r"\bCUDA Toolkit\s+(\d+\.\d+(?:\.\d+)?)\b")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = Path(
@@ -77,6 +86,32 @@ def normalized_version(value: str) -> str:
     return match.group(1)
 
 
+def release_version(
+    value: str,
+) -> tuple[tuple[int, ...], tuple[int | str, ...] | None] | None:
+    match = RELEASE_VERSION_PATTERN.fullmatch(value.strip())
+    if not match:
+        return None
+    core = tuple(int(part) for part in match.group(1).split("."))
+    prerelease_text = match.group(2)
+    if prerelease_text is None:
+        return core, None
+    prerelease = tuple(
+        int(part) if part.isdigit() else part.casefold()
+        for part in prerelease_text.split(".")
+    )
+    return core, prerelease
+
+
+def normalized_release_version(value: str) -> str:
+    match = RELEASE_VERSION_PATTERN.fullmatch(value.strip())
+    if not match:
+        raise ValueError(f"not a supported release version: {value}")
+    core = match.group(1)
+    prerelease = match.group(2)
+    return core + (f"-{prerelease}" if prerelease else "")
+
+
 def newest_numbered_tag(tags: list[str]) -> str:
     numbered = [
         (version, normalized_version(tag))
@@ -103,6 +138,53 @@ def api_get_json(
                     key.lower(): value for key, value in response.headers.items()
                 }
                 return payload, response_headers
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            if exc.code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
+                retry_after = exc.headers.get("Retry-After", "")
+                try:
+                    delay = max(1, int(retry_after))
+                except ValueError:
+                    delay = backoff
+                print(
+                    f"[WARN] HTTP {exc.code} from {url} "
+                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {delay}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
+                backoff *= 2
+                continue
+            raise RuntimeError(
+                f"{url}: HTTP {exc.code}: {body or exc.reason}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt < MAX_ATTEMPTS:
+                print(
+                    f"[WARN] {type(exc).__name__} from {url} "
+                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {backoff}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            raise RuntimeError(f"{url}: {exc}") from exc
+
+    raise RuntimeError(f"unreachable: retries exhausted for {url}")
+
+
+def api_get_text(url: str, headers: dict[str, str]) -> str:
+    backoff = 2
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECS) as response:
+                try:
+                    return response.read().decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise RuntimeError(f"{url}: response was not UTF-8 text") from exc
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
             if exc.code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
@@ -209,6 +291,204 @@ def github_latest_release(repository: str) -> tuple[str, str]:
     return version, release_url
 
 
+def npm_dist_tag_release(package: str, dist_tag: str) -> tuple[str, str]:
+    encoded_package = urllib.parse.quote(package, safe="")
+    url = f"https://registry.npmjs.org/{encoded_package}"
+    payload, _ = api_get_json(
+        url,
+        {"Accept": "application/json", "User-Agent": "ai2c-kpi-image-status"},
+    )
+    dist_tags = payload.get("dist-tags") if isinstance(payload, dict) else None
+    if not isinstance(dist_tags, dict) or not dist_tags.get(dist_tag):
+        raise RuntimeError(f"npm response had no {dist_tag} dist-tag")
+
+    version = normalized_release_version(str(dist_tags[dist_tag]))
+    package_url = "https://www.npmjs.com/package/" + urllib.parse.quote(
+        package,
+        safe="@/",
+    )
+    return version, package_url
+
+
+def dotnet_latest_release(
+    channel: str,
+    component: str,
+) -> tuple[str, str]:
+    url = (
+        "https://dotnetcli.blob.core.windows.net/dotnet/"
+        "release-metadata/releases-index.json"
+    )
+    payload, _ = api_get_json(
+        url,
+        {"Accept": "application/json", "User-Agent": "ai2c-kpi-image-status"},
+    )
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("releases-index"),
+        list,
+    ):
+        raise RuntimeError(".NET release index response had no releases-index")
+
+    fields = {
+        "sdk": "latest-sdk",
+        "runtime": "latest-runtime",
+        "release": "latest-release",
+    }
+    field = fields.get(component)
+    if not field:
+        raise RuntimeError(f"unsupported .NET component: {component}")
+
+    release = next(
+        (
+            entry
+            for entry in payload["releases-index"]
+            if isinstance(entry, dict)
+            and str(entry.get("channel-version") or "") == channel
+        ),
+        None,
+    )
+    if not release or not release.get(field):
+        raise RuntimeError(
+            f".NET release index had no {component} version for channel {channel}"
+        )
+
+    version = normalized_version(str(release[field]))
+    release_url = (
+        "https://dotnet.microsoft.com/en-us/download/dotnet/"
+        + urllib.parse.quote(channel, safe="")
+    )
+    return version, release_url
+
+
+class CudaArchiveParser(HTMLParser):
+    """Collect stable CUDA Toolkit versions and their release links."""
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self._href: str | None = None
+        self._text: list[str] = []
+        self.releases: list[tuple[str, str]] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.lower() != "a":
+            return
+        self._href = next((value for key, value in attrs if key == "href"), None)
+        self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or self._href is None:
+            return
+
+        label = " ".join("".join(self._text).split())
+        match = CUDA_VERSION_PATTERN.search(label)
+        unstable_markers = (
+            "developer preview",
+            "release candidate",
+            "alpha",
+            "beta",
+            " rc",
+        )
+        if match and not any(
+            marker in label.casefold() for marker in unstable_markers
+        ):
+            self.releases.append(
+                (
+                    normalized_version(match.group(1)),
+                    urllib.parse.urljoin(self.base_url, self._href),
+                )
+            )
+        self._href = None
+        self._text = []
+
+
+def nvidia_cuda_latest_release() -> tuple[str, str]:
+    url = "https://developer.nvidia.com/cuda-toolkit-archive"
+    page = api_get_text(url, {"User-Agent": "ai2c-kpi-image-status"})
+    parser = CudaArchiveParser(url)
+    parser.feed(page)
+    if not parser.releases:
+        raise RuntimeError("NVIDIA CUDA archive contained no stable toolkit versions")
+    return max(
+        parser.releases,
+        key=lambda release: numbered_version(release[0]) or (),
+    )
+
+
+def container_command_version(
+    item: dict[str, Any],
+    registry_tag: str,
+    current: dict[str, Any],
+) -> str:
+    image = str(item.get("image") or "").strip()
+    if not image:
+        raise RuntimeError("image is missing for container version command")
+
+    entrypoint = str(current.get("entrypoint") or "").strip()
+    args = current.get("args") or []
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise RuntimeError("container version command args must be a list of strings")
+
+    command = ["docker", "run", "--rm", "--pull", "always"]
+    if entrypoint:
+        command.extend(["--entrypoint", entrypoint])
+    command.append(f"{image}:{registry_tag}")
+    command.extend(args)
+
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=CONTAINER_TIMEOUT_SECS,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("docker executable was not found on the runner") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"container version command timed out after {CONTAINER_TIMEOUT_SECS}s"
+        ) from exc
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        if len(detail) > 500:
+            detail = detail[-500:]
+        raise RuntimeError(
+            f"container version command exited {completed.returncode}"
+            + (f": {detail}" if detail else "")
+        )
+
+    versions = [
+        normalized_release_version(line.strip())
+        for line in completed.stdout.splitlines()
+        if RELEASE_VERSION_PATTERN.fullmatch(line.strip())
+    ]
+    if not versions:
+        raise RuntimeError("container version command returned no version")
+    return versions[-1]
+
+
+def current_image_version(item: dict[str, Any], registry_tag: str) -> str:
+    current = item.get("current_version")
+    if current is None:
+        return normalized_version(registry_tag)
+    if not isinstance(current, dict):
+        raise RuntimeError("current_version configuration must be an object")
+
+    source_type = current.get("type")
+    if source_type == "container_command":
+        return container_command_version(item, registry_tag, current)
+    raise RuntimeError(f"unsupported current version type: {source_type}")
+
+
 def upstream_latest_release(item: dict[str, Any]) -> tuple[str, str]:
     upstream = item.get("upstream")
     if not isinstance(upstream, dict):
@@ -221,20 +501,69 @@ def upstream_latest_release(item: dict[str, Any]) -> tuple[str, str]:
             raise RuntimeError("GitHub upstream repository is missing")
         return github_latest_release(repository)
 
+    if source_type == "npm_dist_tag":
+        package = str(upstream.get("package") or "").strip()
+        dist_tag = str(upstream.get("dist_tag") or "").strip()
+        if not package:
+            raise RuntimeError("npm upstream package is missing")
+        if not dist_tag:
+            raise RuntimeError("npm upstream dist-tag is missing")
+        return npm_dist_tag_release(package, dist_tag)
+
+    if source_type == "dotnet_releases_index":
+        channel = str(upstream.get("channel") or "").strip()
+        component = str(upstream.get("component") or "").strip()
+        if not channel:
+            raise RuntimeError(".NET upstream channel is missing")
+        if not component:
+            raise RuntimeError(".NET upstream component is missing")
+        return dotnet_latest_release(channel, component)
+
+    if source_type == "nvidia_cuda_archive":
+        return nvidia_cuda_latest_release()
+
     raise RuntimeError(f"unsupported upstream type: {source_type}")
 
 
 def compare_versions(current: str, latest: str) -> str:
-    current_version = numbered_version(current)
-    latest_version = numbered_version(latest)
+    current_version = release_version(current)
+    latest_version = release_version(latest)
     if current_version is None or latest_version is None:
         return "unknown"
-    width = max(len(current_version), len(latest_version))
-    current_version += (0,) * (width - len(current_version))
-    latest_version += (0,) * (width - len(latest_version))
-    if current_version < latest_version:
+
+    current_core, current_prerelease = current_version
+    latest_core, latest_prerelease = latest_version
+    width = max(len(current_core), len(latest_core))
+    current_core += (0,) * (width - len(current_core))
+    latest_core += (0,) * (width - len(latest_core))
+    if current_core < latest_core:
         return "outdated"
-    if current_version > latest_version:
+    if current_core > latest_core:
+        return "ahead"
+
+    if current_prerelease is None and latest_prerelease is None:
+        return "current"
+    if current_prerelease is None:
+        return "ahead"
+    if latest_prerelease is None:
+        return "outdated"
+
+    for current_part, latest_part in zip(current_prerelease, latest_prerelease):
+        if current_part == latest_part:
+            continue
+        if isinstance(current_part, int) and isinstance(latest_part, str):
+            return "outdated"
+        if isinstance(current_part, str) and isinstance(latest_part, int):
+            return "ahead"
+        if isinstance(current_part, int) and isinstance(latest_part, int):
+            return "outdated" if current_part < latest_part else "ahead"
+        if isinstance(current_part, str) and isinstance(latest_part, str):
+            return "outdated" if current_part < latest_part else "ahead"
+        return "unknown"
+
+    if len(current_prerelease) < len(latest_prerelease):
+        return "outdated"
+    if len(current_prerelease) > len(latest_prerelease):
         return "ahead"
     return "current"
 
@@ -245,6 +574,7 @@ def collect_image(item: dict[str, Any]) -> dict[str, Any]:
         "image": str(item.get("image") or ""),
         "registry_url": str(item.get("registry_url") or ""),
         "source_url": str(item.get("source_url") or ""),
+        "registry_tag": None,
         "current": None,
         "latest": None,
         "upstream_url": "",
@@ -252,10 +582,18 @@ def collect_image(item: dict[str, Any]) -> dict[str, Any]:
         "errors": [],
     }
 
+    registry_tag: str | None = None
     try:
-        result["current"] = newest_numbered_tag(gitlab_registry_tags(item))
+        registry_tag = newest_numbered_tag(gitlab_registry_tags(item))
+        result["registry_tag"] = registry_tag
     except Exception as exc:
         result["errors"].append(f"registry: {exc}")
+
+    if registry_tag:
+        try:
+            result["current"] = current_image_version(item, registry_tag)
+        except Exception as exc:
+            result["errors"].append(f"current version: {exc}")
 
     try:
         latest, upstream_url = upstream_latest_release(item)

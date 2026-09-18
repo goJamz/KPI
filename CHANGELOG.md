@@ -19,10 +19,14 @@ dashboard.
 ### Added
 
 - **Approved-image freshness page.** A collector compares the highest numbered
-  tag in each configured GitLab container registry repository with its latest
-  stable upstream release. The first configured check is Traefik. The dashboard
-  shows current and available versions, marks updates in red, and reports API
-  failures as unavailable rather than as a pass.
+  tag in each configured GitLab container registry repository with its
+  authoritative upstream release. Configured checks cover Traefik, TileServer
+  GL Light, .NET SDK 10, and CUDA Toolkit using their validated release
+  authorities. TileServer and .NET resolve the versions installed behind their
+  simplified or floating image tags; TileServer also follows its active npm
+  prerelease channel. The dashboard shows current and available versions, marks
+  updates in red, and reports API or container-inspection failures as
+  unavailable rather than as a pass.
 - **Resumable cost backfill.** The backfill derives its target weeks from the
   JWCC period start, subtracts the weeks already present on the `data` branch,
   and processes only the difference — so a run that dies resumes where it

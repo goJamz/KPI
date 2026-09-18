@@ -10,5 +10,55 @@
       "type": "github_latest_release",
       "repository": "traefik/traefik"
     }
+  },
+  {
+    "name": "TileServer GL Light",
+    "image": "registry.cdso.army.mil/cdso/containers/approved-base/tileserver-gl-light",
+    "registry_project": "cdso/containers/approved-base",
+    "registry_repository_id": 4584,
+    "registry_url": "https://code.cdso.army.mil/cdso/containers/approved-base/container_registry/4584",
+    "source_url": "https://code.cdso.army.mil/cdso/containers/base/tileserver-gl",
+    "current_version": {
+      "type": "container_command",
+      "entrypoint": "/usr/local/bin/node",
+      "args": [
+        "-e",
+        "const fs=require('fs');const p=JSON.parse(fs.readFileSync('/usr/src/app/package.json','utf8'));console.log(p.version)"
+      ]
+    },
+    "upstream": {
+      "type": "npm_dist_tag",
+      "package": "tileserver-gl-light",
+      "dist_tag": "next"
+    }
+  },
+  {
+    "name": ".NET SDK",
+    "image": "registry.cdso.army.mil/cdso/containers/approved-base/dotnet-sdk",
+    "registry_project": "cdso/containers/approved-base",
+    "registry_repository_id": 3542,
+    "registry_url": "https://code.cdso.army.mil/cdso/containers/approved-base/container_registry/3542",
+    "source_url": "https://code.cdso.army.mil/cdso/containers/base/dotnet-sdk",
+    "current_version": {
+      "type": "container_command",
+      "entrypoint": "dotnet",
+      "args": ["--version"]
+    },
+    "upstream": {
+      "type": "dotnet_releases_index",
+      "channel": "10.0",
+      "component": "sdk"
+    }
+  },
+  {
+    "name": "CUDA Toolkit",
+    "image": "registry.cdso.army.mil/cdso/containers/approved-base/cuda",
+    "registry_project": "cdso/containers/approved-base",
+    "registry_repository_id": 1551,
+    "registry_url": "https://code.cdso.army.mil/cdso/containers/approved-base/container_registry/1551",
+    "source_url": "https://code.cdso.army.mil/cdso/containers/base/cuda",
+    "upstream": {
+      "type": "nvidia_cuda_archive"
+    }
   }
 ]

@@ -367,15 +367,36 @@ run has nothing to say, so it declines to overwrite the last page that did.
 ### Image status configuration
 
 Image checks are declared in
-`.gitlab/scripts/images/image_sources.json`. Each entry identifies the owning
-GitLab project and registry repository ID, plus the authoritative upstream
-release source. The collector reads every registry tag and compares the highest
+`.gitlab/scripts/images/image_sources.json`. Each entry identifies the GitLab
+registry repository, internal source repository, and authoritative upstream
+release source. The collector reads every registry tag and selects the highest
 purely numeric version; a tag named `latest`, prerelease suffixes, and other
 nonnumeric tags are ignored.
 
-Only Traefik is currently configured and in scope. Its registry repository ID
-is `4832`, and its stable upstream release comes from `traefik/traefik` on
-GitHub. Other approved images are not queried.
+Four approved images are configured:
+
+| Image | Registry repository | Release authority |
+|---|---:|---|
+| Traefik | `4832` | GitHub latest stable release |
+| TileServer GL Light | `4584` | npm `tileserver-gl-light` `next` dist-tag |
+| .NET SDK 10 | `3542` | Microsoft's .NET 10 release index, `latest-sdk` |
+| CUDA Toolkit | `1551` | NVIDIA's CUDA Toolkit archive |
+
+Traefik and CUDA use the selected registry tag as their current version.
+TileServer and .NET need the version installed inside the image because their
+approved tags omit meaningful detail: TileServer's `5.7.0` image contains
+`5.7.0-pre.0`, and .NET's floating `10.0` image contains a specific SDK patch.
+The collector runs a read-only version command in each image, compares
+TileServer with npm's active `next` prerelease and .NET with Microsoft's
+`latest-sdk`, and shows the approved tag separately. This requires the
+`image_status_scan` runner to have Docker access and permission to pull both
+approved images. A Docker or registry-authentication failure makes only the
+affected card unavailable; it does not block the other checks or Pages
+publishing.
+
+GitHub applies a low unauthenticated API rate limit. Set the optional
+`GITHUB_TOKEN` CI/CD variable if the Traefik request receives HTTP 403. The npm,
+Microsoft, and NVIDIA checks use their validated public endpoints directly.
 
 `generate_report.py` imports `render_cluster.py`, never the other way round:
 the cluster module takes the page CSS as a parameter rather than importing it,

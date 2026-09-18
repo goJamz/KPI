@@ -104,8 +104,15 @@ def render_page(report: dict | None, cluster_available: bool) -> str:
         if status not in status_labels:
             status = "unknown"
         name = escape(str(item.get("name") or "Unnamed image"))
+        registry_tag = escape(str(item.get("registry_tag") or ""))
         current = escape(str(item.get("current") or "Unavailable"))
         latest = escape(str(item.get("latest") or "Unavailable"))
+        registry_tag_row = (
+            '<div class="image-version-row"><span>Approved image tag</span>'
+            f'<strong>{registry_tag}</strong></div>'
+            if registry_tag and registry_tag != current
+            else ""
+        )
 
         links = []
         for label, key in (
@@ -138,6 +145,7 @@ def render_page(report: dict | None, cluster_available: bool) -> str:
             f'<h2>{name}</h2>'
             '<div class="image-version-row"><span>Current</span>'
             f'<strong>{current}</strong></div>'
+            f'{registry_tag_row}'
             '<div class="image-version-row"><span>Latest available</span>'
             f'<strong>{latest}</strong></div>'
             f'{links_html}{error_html}'
