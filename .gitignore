@@ -10,6 +10,10 @@ image_status_reports/
 cost_history/
 resource_history/
 public/
+
+# Local planning notes that should not be published with the KPI site.
+future_work/
+
 magpie/
 .agents
 .codex
