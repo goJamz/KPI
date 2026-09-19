@@ -341,6 +341,7 @@ run has nothing to say, so it declines to overwrite the last page that did.
       fetch_history.py              pull the data branch as one archive
       persist_history.py            commit changed files via the Commits API
       history_io.py                 content-aware writes, manifest handling
+      gitlab_api.py                 shared GitLab connection/request policy
       naming.py                     name folding, aliases, shared projects
       pop.py                        period-of-performance arithmetic
     costs/
@@ -358,6 +359,7 @@ run has nothing to say, so it declines to overwrite the last page that did.
       render_cluster.py             the cluster panel, summary and page
     images/
       collect_image_status.py       registry/upstream version comparison
+      image_status_constants.py     shared image-status policy and filenames
       image_sources.json            images and their release authorities
       render_image_status.py        standalone image-status page renderer
     pipeline/
@@ -372,6 +374,14 @@ registry repository, internal source repository, and authoritative upstream
 release source. The collector reads every registry tag and selects the highest
 purely numeric version; a tag named `latest`, prerelease suffixes, and other
 nonnumeric tags are ignored.
+
+Shared image-status values such as report filenames, HTTP identity, upstream
+endpoint constants, and comparison states live in
+`.gitlab/scripts/images/image_status_constants.py`. GitLab connection and
+request policy shared with the pipeline-metrics collector lives in
+`.gitlab/scripts/common/gitlab_api.py`. Image-specific IDs, paths, commands,
+and release authorities remain in `image_sources.json` so there is one
+auditable place to add or change a managed image.
 
 Four approved images are configured:
 

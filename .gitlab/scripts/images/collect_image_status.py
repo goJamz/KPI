@@ -40,35 +40,51 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+COMMON_DIR = SCRIPT_DIR.parent / "common"
+sys.path.insert(0, str(COMMON_DIR))
+from gitlab_api import (  # noqa: E402
+    API_MAX_ATTEMPTS,
+    API_TIMEOUT_SECONDS,
+    GITLAB_PAGE_SIZE,
+    RETRYABLE_HTTP_STATUSES,
+    gitlab_api_url,
+    gitlab_token,
+)
 
-PER_PAGE = 100
-MAX_ATTEMPTS = 4
-TIMEOUT_SECS = 60
-CONTAINER_TIMEOUT_SECS = 300
-RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+from image_status_constants import (
+    CONFIG_ENV_VAR,
+    CONTAINER_TIMEOUT_SECONDS,
+    DEFAULT_CONFIG_FILENAME,
+    DEFAULT_REPORTS_DIR,
+    DOTNET_DOWNLOAD_BASE_URL,
+    DOTNET_RELEASE_INDEX_URL,
+    GITHUB_API_VERSION,
+    HTTP_USER_AGENT,
+    NVIDIA_CUDA_ARCHIVE_URL,
+    REPORT_FILENAME,
+    REPORTS_DIR_ENV_VAR,
+    STATUS_AHEAD,
+    STATUS_CURRENT,
+    STATUS_OUTDATED,
+    STATUS_UNKNOWN,
+)
+
 VERSION_PATTERN = re.compile(r"^[vV]?(\d+(?:\.\d+)*)$")
 RELEASE_VERSION_PATTERN = re.compile(
     r"^[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
 )
 CUDA_VERSION_PATTERN = re.compile(r"\bCUDA Toolkit\s+(\d+\.\d+(?:\.\d+)?)\b")
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = Path(
-    os.environ.get("IMAGE_STATUS_CONFIG", SCRIPT_DIR / "image_sources.json")
+    os.environ.get(CONFIG_ENV_VAR, SCRIPT_DIR / DEFAULT_CONFIG_FILENAME)
 )
 REPORTS_DIR = Path(
-    os.environ.get("IMAGE_STATUS_REPORTS_DIR", "image_status_reports")
+    os.environ.get(REPORTS_DIR_ENV_VAR, DEFAULT_REPORTS_DIR)
 )
 
-GITLAB_TOKEN = os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get(
-    "AI2C_API_RWA", ""
-).strip()
-_GITLAB_BASE_URL = os.environ.get("GITLAB_URL", "").strip().rstrip("/")
-GITLAB_API_URL = (
-    os.environ.get("GITLAB_API_V4_URL", "").strip()
-    or os.environ.get("CI_API_V4_URL", "").strip()
-    or (f"{_GITLAB_BASE_URL}/api/v4" if _GITLAB_BASE_URL else "")
-).rstrip("/")
+GITLAB_TOKEN = gitlab_token()
+GITLAB_API_URL = gitlab_api_url(allow_base_url=True)
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 
 
@@ -123,102 +139,78 @@ def newest_numbered_tag(tags: list[str]) -> str:
     return max(numbered, key=lambda item: item[0])[1]
 
 
+def _api_get_bytes(
+    url: str,
+    headers: dict[str, str],
+) -> tuple[bytes, dict[str, str]]:
+    backoff = 2
+
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=API_TIMEOUT_SECONDS,
+            ) as response:
+                response_headers = {
+                    key.lower(): value for key, value in response.headers.items()
+                }
+                return response.read(), response_headers
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            if (
+                exc.code in RETRYABLE_HTTP_STATUSES
+                and attempt < API_MAX_ATTEMPTS
+            ):
+                retry_after = exc.headers.get("Retry-After", "")
+                try:
+                    delay = max(1, int(retry_after))
+                except ValueError:
+                    delay = backoff
+                print(
+                    f"[WARN] HTTP {exc.code} from {url} "
+                    f"(attempt {attempt}/{API_MAX_ATTEMPTS}); "
+                    f"retrying in {delay}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
+                backoff *= 2
+                continue
+            raise RuntimeError(
+                f"{url}: HTTP {exc.code}: {body or exc.reason}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt < API_MAX_ATTEMPTS:
+                print(
+                    f"[WARN] {type(exc).__name__} from {url} "
+                    f"(attempt {attempt}/{API_MAX_ATTEMPTS}); "
+                    f"retrying in {backoff}s",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            raise RuntimeError(f"{url}: {exc}") from exc
+
+    raise RuntimeError(f"unreachable: retries exhausted for {url}")
+
+
 def api_get_json(
     url: str,
     headers: dict[str, str],
 ) -> tuple[object, dict[str, str]]:
-    backoff = 2
-
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        request = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECS) as response:
-                payload = json.loads(response.read())
-                response_headers = {
-                    key.lower(): value for key, value in response.headers.items()
-                }
-                return payload, response_headers
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
-            if exc.code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
-                retry_after = exc.headers.get("Retry-After", "")
-                try:
-                    delay = max(1, int(retry_after))
-                except ValueError:
-                    delay = backoff
-                print(
-                    f"[WARN] HTTP {exc.code} from {url} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {delay}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                time.sleep(delay)
-                backoff *= 2
-                continue
-            raise RuntimeError(
-                f"{url}: HTTP {exc.code}: {body or exc.reason}"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if attempt < MAX_ATTEMPTS:
-                print(
-                    f"[WARN] {type(exc).__name__} from {url} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {backoff}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                time.sleep(backoff)
-                backoff *= 2
-                continue
-            raise RuntimeError(f"{url}: {exc}") from exc
-
-    raise RuntimeError(f"unreachable: retries exhausted for {url}")
+    payload, response_headers = _api_get_bytes(url, headers)
+    return json.loads(payload), response_headers
 
 
 def api_get_text(url: str, headers: dict[str, str]) -> str:
-    backoff = 2
-
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        request = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_SECS) as response:
-                try:
-                    return response.read().decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    raise RuntimeError(f"{url}: response was not UTF-8 text") from exc
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode(errors="replace")
-            if exc.code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
-                retry_after = exc.headers.get("Retry-After", "")
-                try:
-                    delay = max(1, int(retry_after))
-                except ValueError:
-                    delay = backoff
-                print(
-                    f"[WARN] HTTP {exc.code} from {url} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {delay}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                time.sleep(delay)
-                backoff *= 2
-                continue
-            raise RuntimeError(
-                f"{url}: HTTP {exc.code}: {body or exc.reason}"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if attempt < MAX_ATTEMPTS:
-                print(
-                    f"[WARN] {type(exc).__name__} from {url} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}); retrying in {backoff}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                time.sleep(backoff)
-                backoff *= 2
-                continue
-            raise RuntimeError(f"{url}: {exc}") from exc
-
-    raise RuntimeError(f"unreachable: retries exhausted for {url}")
+    payload, _ = _api_get_bytes(url, headers)
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{url}: response was not UTF-8 text") from exc
 
 
 def gitlab_registry_tags(item: dict[str, Any]) -> list[str]:
@@ -235,7 +227,7 @@ def gitlab_registry_tags(item: dict[str, Any]) -> list[str]:
     while True:
         query = urllib.parse.urlencode(
             {
-                "per_page": PER_PAGE,
+                "per_page": GITLAB_PAGE_SIZE,
                 "page": page,
             }
         )
@@ -257,7 +249,7 @@ def gitlab_registry_tags(item: dict[str, Any]) -> list[str]:
         ]
         tags.extend(page_tags)
 
-        if len(payload) < PER_PAGE:
+        if len(payload) < GITLAB_PAGE_SIZE:
             break
         page += 1
 
@@ -271,8 +263,8 @@ def github_latest_release(repository: str) -> tuple[str, str]:
     url = f"https://api.github.com/repos/{encoded_repository}/releases/latest"
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "ai2c-kpi-image-status",
-        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": HTTP_USER_AGENT,
+        "X-GitHub-Api-Version": GITHUB_API_VERSION,
     }
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
@@ -296,7 +288,7 @@ def npm_dist_tag_release(package: str, dist_tag: str) -> tuple[str, str]:
     url = f"https://registry.npmjs.org/{encoded_package}"
     payload, _ = api_get_json(
         url,
-        {"Accept": "application/json", "User-Agent": "ai2c-kpi-image-status"},
+        {"Accept": "application/json", "User-Agent": HTTP_USER_AGENT},
     )
     dist_tags = payload.get("dist-tags") if isinstance(payload, dict) else None
     if not isinstance(dist_tags, dict) or not dist_tags.get(dist_tag):
@@ -314,13 +306,10 @@ def dotnet_latest_release(
     channel: str,
     component: str,
 ) -> tuple[str, str]:
-    url = (
-        "https://dotnetcli.blob.core.windows.net/dotnet/"
-        "release-metadata/releases-index.json"
-    )
+    url = DOTNET_RELEASE_INDEX_URL
     payload, _ = api_get_json(
         url,
-        {"Accept": "application/json", "User-Agent": "ai2c-kpi-image-status"},
+        {"Accept": "application/json", "User-Agent": HTTP_USER_AGENT},
     )
     if not isinstance(payload, dict) or not isinstance(
         payload.get("releases-index"),
@@ -352,9 +341,9 @@ def dotnet_latest_release(
         )
 
     version = normalized_version(str(release[field]))
-    release_url = (
-        "https://dotnet.microsoft.com/en-us/download/dotnet/"
-        + urllib.parse.quote(channel, safe="")
+    release_url = DOTNET_DOWNLOAD_BASE_URL + "/" + urllib.parse.quote(
+        channel,
+        safe="",
     )
     return version, release_url
 
@@ -410,8 +399,8 @@ class CudaArchiveParser(HTMLParser):
 
 
 def nvidia_cuda_latest_release() -> tuple[str, str]:
-    url = "https://developer.nvidia.com/cuda-toolkit-archive"
-    page = api_get_text(url, {"User-Agent": "ai2c-kpi-image-status"})
+    url = NVIDIA_CUDA_ARCHIVE_URL
+    page = api_get_text(url, {"User-Agent": HTTP_USER_AGENT})
     parser = CudaArchiveParser(url)
     parser.feed(page)
     if not parser.releases:
@@ -448,13 +437,14 @@ def container_command_version(
             check=False,
             capture_output=True,
             text=True,
-            timeout=CONTAINER_TIMEOUT_SECS,
+            timeout=CONTAINER_TIMEOUT_SECONDS,
         )
     except FileNotFoundError as exc:
         raise RuntimeError("docker executable was not found on the runner") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"container version command timed out after {CONTAINER_TIMEOUT_SECS}s"
+            f"container version command timed out after "
+            f"{CONTAINER_TIMEOUT_SECONDS}s"
         ) from exc
 
     if completed.returncode != 0:
@@ -529,7 +519,7 @@ def compare_versions(current: str, latest: str) -> str:
     current_version = release_version(current)
     latest_version = release_version(latest)
     if current_version is None or latest_version is None:
-        return "unknown"
+        return STATUS_UNKNOWN
 
     current_core, current_prerelease = current_version
     latest_core, latest_prerelease = latest_version
@@ -537,35 +527,39 @@ def compare_versions(current: str, latest: str) -> str:
     current_core += (0,) * (width - len(current_core))
     latest_core += (0,) * (width - len(latest_core))
     if current_core < latest_core:
-        return "outdated"
+        return STATUS_OUTDATED
     if current_core > latest_core:
-        return "ahead"
+        return STATUS_AHEAD
 
     if current_prerelease is None and latest_prerelease is None:
-        return "current"
+        return STATUS_CURRENT
     if current_prerelease is None:
-        return "ahead"
+        return STATUS_AHEAD
     if latest_prerelease is None:
-        return "outdated"
+        return STATUS_OUTDATED
 
     for current_part, latest_part in zip(current_prerelease, latest_prerelease):
         if current_part == latest_part:
             continue
         if isinstance(current_part, int) and isinstance(latest_part, str):
-            return "outdated"
+            return STATUS_OUTDATED
         if isinstance(current_part, str) and isinstance(latest_part, int):
-            return "ahead"
+            return STATUS_AHEAD
         if isinstance(current_part, int) and isinstance(latest_part, int):
-            return "outdated" if current_part < latest_part else "ahead"
+            return (
+                STATUS_OUTDATED if current_part < latest_part else STATUS_AHEAD
+            )
         if isinstance(current_part, str) and isinstance(latest_part, str):
-            return "outdated" if current_part < latest_part else "ahead"
-        return "unknown"
+            return (
+                STATUS_OUTDATED if current_part < latest_part else STATUS_AHEAD
+            )
+        return STATUS_UNKNOWN
 
     if len(current_prerelease) < len(latest_prerelease):
-        return "outdated"
+        return STATUS_OUTDATED
     if len(current_prerelease) > len(latest_prerelease):
-        return "ahead"
-    return "current"
+        return STATUS_AHEAD
+    return STATUS_CURRENT
 
 
 def collect_image(item: dict[str, Any]) -> dict[str, Any]:
@@ -578,7 +572,7 @@ def collect_image(item: dict[str, Any]) -> dict[str, Any]:
         "current": None,
         "latest": None,
         "upstream_url": "",
-        "status": "unknown",
+        "status": STATUS_UNKNOWN,
         "errors": [],
     }
 
@@ -628,15 +622,15 @@ def load_config(path: Path) -> list[dict[str, Any]]:
 
 def report_status(items: list[dict[str, Any]]) -> str:
     statuses = {str(item.get("status")) for item in items}
-    if statuses == {"unknown"}:
+    if statuses == {STATUS_UNKNOWN}:
         return "failed"
-    if "unknown" in statuses:
+    if STATUS_UNKNOWN in statuses:
         return "partial"
-    if "outdated" in statuses:
-        return "outdated"
-    if "ahead" in statuses:
-        return "ahead"
-    return "current"
+    if STATUS_OUTDATED in statuses:
+        return STATUS_OUTDATED
+    if STATUS_AHEAD in statuses:
+        return STATUS_AHEAD
+    return STATUS_CURRENT
 
 
 def main() -> None:
@@ -669,7 +663,7 @@ def main() -> None:
     }
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    report_path = REPORTS_DIR / "status.json"
+    report_path = REPORTS_DIR / REPORT_FILENAME
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[INFO] Wrote {report_path}; overall status={status}")
 

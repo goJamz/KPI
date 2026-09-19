@@ -13,6 +13,16 @@ import sys
 from html import escape
 from pathlib import Path
 
+from image_status_constants import (
+    DEFAULT_REPORTS_DIR,
+    PAGE_FILENAME,
+    REPORT_FILENAME,
+    STATUS_AHEAD,
+    STATUS_CURRENT,
+    STATUS_OUTDATED,
+    STATUS_UNKNOWN,
+)
+
 
 COSTS_DIR = Path(__file__).resolve().parent.parent / "costs"
 sys.path.insert(0, str(COSTS_DIR))
@@ -69,7 +79,7 @@ IMAGE_STATUS_CSS = """
 
 
 def load_report(base_dir: Path) -> dict | None:
-    report_path = base_dir / "image_status_reports" / "status.json"
+    report_path = base_dir / DEFAULT_REPORTS_DIR / REPORT_FILENAME
     if not report_path.is_file():
         print("[INFO] No image status report this run — page will show not collected")
         return None
@@ -84,6 +94,15 @@ def load_report(base_dir: Path) -> dict | None:
     return report
 
 
+def version_row(label: str, value: str) -> str:
+    """Render one consistently escaped image-version row."""
+    return (
+        '<div class="image-version-row">'
+        f'<span>{escape(label)}</span><strong>{escape(value)}</strong>'
+        '</div>'
+    )
+
+
 def render_page(report: dict | None, cluster_available: bool) -> str:
     cluster_link = (
         '<a href="cluster.html">Cluster Utilization</a>'
@@ -92,24 +111,23 @@ def render_page(report: dict | None, cluster_available: bool) -> str:
     generated = str((report or {}).get("collected_utc") or "Not collected")
     items = (report or {}).get("items") or []
     status_labels = {
-        "current": "Current",
-        "outdated": "Update available",
-        "ahead": "Ahead of upstream",
-        "unknown": "Check unavailable",
+        STATUS_CURRENT: "Current",
+        STATUS_OUTDATED: "Update available",
+        STATUS_AHEAD: "Ahead of upstream",
+        STATUS_UNKNOWN: "Check unavailable",
     }
 
     cards = []
     for item in items:
-        status = str(item.get("status") or "unknown")
+        status = str(item.get("status") or STATUS_UNKNOWN)
         if status not in status_labels:
-            status = "unknown"
+            status = STATUS_UNKNOWN
         name = escape(str(item.get("name") or "Unnamed image"))
-        registry_tag = escape(str(item.get("registry_tag") or ""))
-        current = escape(str(item.get("current") or "Unavailable"))
-        latest = escape(str(item.get("latest") or "Unavailable"))
+        registry_tag = str(item.get("registry_tag") or "")
+        current = str(item.get("current") or "Unavailable")
+        latest = str(item.get("latest") or "Unavailable")
         registry_tag_row = (
-            '<div class="image-version-row"><span>Approved image tag</span>'
-            f'<strong>{registry_tag}</strong></div>'
+            version_row("Approved image tag", registry_tag)
             if registry_tag and registry_tag != current
             else ""
         )
@@ -143,17 +161,17 @@ def render_page(report: dict | None, cluster_available: bool) -> str:
             f'<div class="image-status-banner">{status_labels[status]}</div>'
             '<div class="image-status-body">'
             f'<h2>{name}</h2>'
-            '<div class="image-version-row"><span>Current</span>'
-            f'<strong>{current}</strong></div>'
+            f'{version_row("Current", current)}'
             f'{registry_tag_row}'
-            '<div class="image-version-row"><span>Latest available</span>'
-            f'<strong>{latest}</strong></div>'
+            f'{version_row("Latest available", latest)}'
             f'{links_html}{error_html}'
             '</div></article>'
         )
 
     if cards:
-        outdated = sum(1 for item in items if item.get("status") == "outdated")
+        outdated = sum(
+            1 for item in items if item.get("status") == STATUS_OUTDATED
+        )
         content = (
             f'<p class="image-status-summary">{len(items)} image(s) checked; '
             f'{outdated} update(s) available.</p>'
@@ -197,7 +215,7 @@ def main() -> None:
     public_dir.mkdir(parents=True, exist_ok=True)
 
     report = load_report(repo_root)
-    output = public_dir / "image-status.html"
+    output = public_dir / PAGE_FILENAME
     output.write_text(
         render_page(report, cluster_available=(public_dir / "cluster.html").is_file()),
         encoding="utf-8",

@@ -36,13 +36,17 @@ from datetime import date, datetime, time as time_t, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "common"))
+from gitlab_api import (  # noqa: E402
+    API_MAX_ATTEMPTS,
+    API_TIMEOUT_SECONDS,
+    GITLAB_PAGE_SIZE,
+    RETRYABLE_HTTP_STATUSES,
+    gitlab_api_url,
+    gitlab_token,
+)
 from history_io import update_manifest, write_if_changed  # noqa: E402
 
 
-PER_PAGE = 100
-RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
-MAX_ATTEMPTS = 4
-TIMEOUT_SECS = 60
 DEFAULT_WORKERS = 32
 
 
@@ -73,13 +77,8 @@ def _default_root_group() -> str:
     return ""
 
 
-TOKEN = os.environ.get("GITLAB_TOKEN", "").strip() or os.environ.get(
-    "AI2C_API_RWA", ""
-).strip()
-API_URL = (
-    os.environ.get("GITLAB_API_V4_URL", "").strip()
-    or os.environ.get("CI_API_V4_URL", "").strip()
-).rstrip("/")
+TOKEN = gitlab_token()
+API_URL = gitlab_api_url()
 ROOT_GROUP = os.environ.get("GITLAB_ROOT_GROUP", "").strip() or _default_root_group()
 REPORTS_DIR = Path(os.environ.get("PIPELINE_REPORTS_DIR", "pipeline_reports"))
 HISTORY_DIR = Path(os.environ.get("HISTORY_DIR", "pipeline_history"))
@@ -111,23 +110,27 @@ def api_get(path: str, params: dict[str, object] | None = None) -> tuple[object,
     url = f"{API_URL}{path}{query}"
     backoff = 2
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
         req = urllib.request.Request(
             url,
             headers={"PRIVATE-TOKEN": TOKEN},
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_SECS) as resp:
+            with urllib.request.urlopen(req, timeout=API_TIMEOUT_SECONDS) as resp:
                 payload = resp.read()
                 headers = {k: v for k, v in resp.headers.items()}
                 return json.loads(payload), headers
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
-            if exc.code in RETRYABLE_STATUSES and attempt < MAX_ATTEMPTS:
+            if (
+                exc.code in RETRYABLE_HTTP_STATUSES
+                and attempt < API_MAX_ATTEMPTS
+            ):
                 print(
                     f"[WARN] HTTP {exc.code} on {path} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}) — retrying in {backoff}s",
+                    f"(attempt {attempt}/{API_MAX_ATTEMPTS}) — "
+                    f"retrying in {backoff}s",
                     file=sys.stderr,
                 )
                 time.sleep(backoff)
@@ -135,10 +138,11 @@ def api_get(path: str, params: dict[str, object] | None = None) -> tuple[object,
                 continue
             raise RuntimeError(f"{path}: HTTP {exc.code}: {body or exc.reason}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if attempt < MAX_ATTEMPTS:
+            if attempt < API_MAX_ATTEMPTS:
                 print(
                     f"[WARN] {type(exc).__name__} on {path} "
-                    f"(attempt {attempt}/{MAX_ATTEMPTS}) — retrying in {backoff}s",
+                    f"(attempt {attempt}/{API_MAX_ATTEMPTS}) — "
+                    f"retrying in {backoff}s",
                     file=sys.stderr,
                 )
                 time.sleep(backoff)
@@ -161,7 +165,7 @@ def get_projects(root_group: str) -> list[dict[str, object]]:
                 "include_subgroups": "true",
                 "with_shared": "false",
                 "archived": "false",
-                "per_page": PER_PAGE,
+                "per_page": GITLAB_PAGE_SIZE,
                 "page": page,
             },
         )
@@ -169,7 +173,7 @@ def get_projects(root_group: str) -> list[dict[str, object]]:
         if not page_projects:
             break
         projects.extend(page_projects)
-        if len(page_projects) < PER_PAGE:
+        if len(page_projects) < GITLAB_PAGE_SIZE:
             break
         page += 1
 
@@ -185,7 +189,7 @@ def get_recent_jobs(
     next_url = f"{API_URL}/projects/{project_id}/jobs"
     params: dict[str, object] | None = {
         "pagination": "keyset",
-        "per_page": PER_PAGE,
+        "per_page": GITLAB_PAGE_SIZE,
         "order_by": "id",
         "sort": "desc",
     }
@@ -226,7 +230,7 @@ def get_recent_jobs(
             next_url = f"{API_URL}/projects/{project_id}/jobs"
             params = {
                 "pagination": "keyset",
-                "per_page": PER_PAGE,
+                "per_page": GITLAB_PAGE_SIZE,
                 "order_by": "id",
                 "sort": "desc",
                 "page": headers["X-Next-Page"],
