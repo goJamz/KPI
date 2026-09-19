@@ -1,1 +1,64 @@
-x`
+# -----------------------------------------------------------------------------
+# Approved-image freshness — compare the highest numbered registry tag with
+# the configured upstream stable release. Runs where both GitLab and public
+# upstream release APIs are reachable.
+# -----------------------------------------------------------------------------
+image_status_scan:
+  stage: analysis
+  environment:
+    name: expedition-0-$PUBLISH_ENVIRONMENT
+  tags:
+    - expedition-0, $PUBLISH_ENVIRONMENT
+
+  variables:
+    PUBLISH_ENVIRONMENT: "prod"
+
+  allow_failure: true
+
+  script:
+    - |
+      set -eu
+
+      buildah --version
+      buildah info
+
+      TILESERVER_IMAGE="registry.cdso.army.mil/cdso/containers/approved-base/tileserver-gl-light:5.7.0"
+      TILESERVER_CONTAINER="kpi-tileserver-${CI_JOB_ID}"
+
+      DOTNET_IMAGE="registry.cdso.army.mil/cdso/containers/approved-base/dotnet-sdk:10.0"
+      DOTNET_CONTAINER="kpi-dotnet-${CI_JOB_ID}"
+
+      cleanup() {
+        buildah rm "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
+        buildah rm "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
+      }
+      trap cleanup EXIT
+
+      cleanup
+
+      echo "=== TileServer version through Buildah ==="
+      buildah from \
+        --pull=always \
+        --name "${TILESERVER_CONTAINER}" \
+        "${TILESERVER_IMAGE}"
+
+      buildah run "${TILESERVER_CONTAINER}" -- \
+        /usr/local/bin/node \
+        -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("/usr/src/app/package.json","utf8"));console.log(p.version)'
+
+      echo "=== .NET SDK version through Buildah ==="
+      buildah from \
+        --pull=always \
+        --name "${DOTNET_CONTAINER}" \
+        "${DOTNET_IMAGE}"
+
+      buildah run "${DOTNET_CONTAINER}" -- dotnet --version
+
+    - python3 .gitlab/scripts/images/collect_image_status.py
+
+  artifacts:
+    name: "image-status-${CI_PIPELINE_CREATED_AT}"
+    paths:
+      - image_status_reports/
+    expire_in: 7 days
+    when: always
