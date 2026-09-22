@@ -19,14 +19,15 @@ image_status_scan:
     - |
       set -eu
 
-      # This runner's system storage.conf points at root-owned paths. Override
-      # both locations explicitly for every storage-aware Buildah command.
-      BUILDAH_ROOT="${HOME}/.local/share/containers/storage"
+      # This runner has neither writable system storage paths nor /dev/fuse.
+      # Use explicit user-owned paths and the FUSE-free vfs storage driver.
+      BUILDAH_ROOT="${HOME}/.local/share/containers/kpi-vfs-storage"
       BUILDAH_RUNROOT="${CI_PROJECT_DIR}/.buildah-runroot-${CI_JOB_ID}"
       mkdir -p "${BUILDAH_ROOT}" "${BUILDAH_RUNROOT}"
       chmod 700 "${BUILDAH_ROOT}" "${BUILDAH_RUNROOT}"
       BUILDAH=(
         buildah
+        --storage-driver vfs
         --root "${BUILDAH_ROOT}"
         --runroot "${BUILDAH_RUNROOT}"
       )
