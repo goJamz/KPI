@@ -51,9 +51,11 @@ spec:
       options:
         - "KPI Collection"
         - "Cost Backfill"
+        - "Image Status Test"
       description: >-
         KPI Collection runs every collector and rebuilds the page.
         Cost Backfill gathers missing weeks of cost history only.
+        Image Status Test runs only the approved-image freshness job.
 
 ---
 
@@ -108,6 +110,7 @@ include:
   - local: .gitlab/jobs/images/status.yml
     rules:
       - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
+      - if: '"$[[ inputs.RUN_TYPE ]]" == "Image Status Test"'
   - local: .gitlab/jobs/page/kpi_pages.yml
     rules:
       - if: '"$[[ inputs.RUN_TYPE ]]" == "KPI Collection"'
