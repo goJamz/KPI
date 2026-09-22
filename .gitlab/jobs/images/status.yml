@@ -31,6 +31,11 @@ image_status_scan:
         --root "${BUILDAH_ROOT}"
         --runroot "${BUILDAH_RUNROOT}"
       )
+      BUILDAH_UNSHARE=(
+        "${BUILDAH[@]}"
+        unshare
+        "${BUILDAH[@]}"
+      )
       REGISTRY_HOST="${CI_REGISTRY:-registry.cdso.army.mil}"
       export REGISTRY_AUTH_FILE="${CI_PROJECT_DIR}/.buildah-auth-${CI_JOB_ID}.json"
 
@@ -44,10 +49,10 @@ image_status_scan:
       DOTNET_CONTAINER="kpi-dotnet-${CI_JOB_ID}"
 
       cleanup() {
-        "${BUILDAH[@]}" umount "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
-        "${BUILDAH[@]}" umount "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
-        "${BUILDAH[@]}" rm "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
-        "${BUILDAH[@]}" rm "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
+        "${BUILDAH_UNSHARE[@]}" umount "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
+        "${BUILDAH_UNSHARE[@]}" umount "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
+        "${BUILDAH_UNSHARE[@]}" rm "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
+        "${BUILDAH_UNSHARE[@]}" rm "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
         rm -f "${REGISTRY_AUTH_FILE}"
       }
       trap cleanup EXIT
@@ -68,10 +73,11 @@ image_status_scan:
       echo "=== TileServer version through Buildah ==="
       "${BUILDAH[@]}" from \
         --pull=always \
+        --network none \
         --name "${TILESERVER_CONTAINER}" \
         "${TILESERVER_IMAGE}"
 
-      TILESERVER_ROOTFS="$("${BUILDAH[@]}" mount "${TILESERVER_CONTAINER}")"
+      TILESERVER_ROOTFS="$("${BUILDAH_UNSHARE[@]}" mount "${TILESERVER_CONTAINER}")"
       python3 -c \
         'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' \
         "${TILESERVER_ROOTFS}/usr/src/app/package.json"
@@ -79,10 +85,11 @@ image_status_scan:
       echo "=== .NET SDK version through Buildah ==="
       "${BUILDAH[@]}" from \
         --pull=always \
+        --network none \
         --name "${DOTNET_CONTAINER}" \
         "${DOTNET_IMAGE}"
 
-      DOTNET_ROOTFS="$("${BUILDAH[@]}" mount "${DOTNET_CONTAINER}")"
+      DOTNET_ROOTFS="$("${BUILDAH_UNSHARE[@]}" mount "${DOTNET_CONTAINER}")"
       python3 -c \
         'import pathlib,sys; versions=[p.name for p in pathlib.Path(sys.argv[1]).iterdir() if p.is_dir() and all(part.isdigit() for part in p.name.split("."))]; print(max(versions, key=lambda value: tuple(map(int, value.split(".")))))' \
         "${DOTNET_ROOTFS}/usr/share/dotnet/sdk"
