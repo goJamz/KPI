@@ -69,7 +69,7 @@ image_status_scan:
         --name "${TILESERVER_CONTAINER}" \
         "${TILESERVER_IMAGE}"
 
-      "${BUILDAH[@]}" run "${TILESERVER_CONTAINER}" -- \
+      "${BUILDAH[@]}" run --isolation chroot "${TILESERVER_CONTAINER}" -- \
         /usr/local/bin/node \
         -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("/usr/src/app/package.json","utf8"));console.log(p.version)'
 
@@ -79,7 +79,8 @@ image_status_scan:
         --name "${DOTNET_CONTAINER}" \
         "${DOTNET_IMAGE}"
 
-      "${BUILDAH[@]}" run "${DOTNET_CONTAINER}" -- dotnet --version
+      "${BUILDAH[@]}" run --isolation chroot "${DOTNET_CONTAINER}" -- \
+        dotnet --version
 
     - python3 .gitlab/scripts/images/collect_image_status.py
 
