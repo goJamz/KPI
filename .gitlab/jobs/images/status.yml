@@ -30,6 +30,8 @@ image_status_scan:
         --root "${BUILDAH_ROOT}"
         --runroot "${BUILDAH_RUNROOT}"
       )
+      REGISTRY_HOST="${CI_REGISTRY:-registry.cdso.army.mil}"
+      export REGISTRY_AUTH_FILE="${CI_PROJECT_DIR}/.buildah-auth-${CI_JOB_ID}.json"
 
       buildah --version
       "${BUILDAH[@]}" info
@@ -43,10 +45,22 @@ image_status_scan:
       cleanup() {
         "${BUILDAH[@]}" rm "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
         "${BUILDAH[@]}" rm "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
+        rm -f "${REGISTRY_AUTH_FILE}"
       }
       trap cleanup EXIT
 
       cleanup
+
+      if [ -z "${CI_JOB_TOKEN:-}" ]; then
+        echo "[ERROR] CI_JOB_TOKEN is unavailable; cannot authenticate to ${REGISTRY_HOST}." >&2
+        exit 1
+      fi
+
+      printf '%s' "${CI_JOB_TOKEN}" |
+        "${BUILDAH[@]}" login \
+          --username gitlab-ci-token \
+          --password-stdin \
+          "${REGISTRY_HOST}"
 
       echo "=== TileServer version through Buildah ==="
       "${BUILDAH[@]}" from \
