@@ -44,6 +44,8 @@ image_status_scan:
       DOTNET_CONTAINER="kpi-dotnet-${CI_JOB_ID}"
 
       cleanup() {
+        "${BUILDAH[@]}" umount "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
+        "${BUILDAH[@]}" umount "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
         "${BUILDAH[@]}" rm "${TILESERVER_CONTAINER}" >/dev/null 2>&1 || true
         "${BUILDAH[@]}" rm "${DOTNET_CONTAINER}" >/dev/null 2>&1 || true
         rm -f "${REGISTRY_AUTH_FILE}"
@@ -69,9 +71,10 @@ image_status_scan:
         --name "${TILESERVER_CONTAINER}" \
         "${TILESERVER_IMAGE}"
 
-      "${BUILDAH[@]}" run --isolation chroot "${TILESERVER_CONTAINER}" -- \
-        /usr/local/bin/node \
-        -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("/usr/src/app/package.json","utf8"));console.log(p.version)'
+      TILESERVER_ROOTFS="$("${BUILDAH[@]}" mount "${TILESERVER_CONTAINER}")"
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' \
+        "${TILESERVER_ROOTFS}/usr/src/app/package.json"
 
       echo "=== .NET SDK version through Buildah ==="
       "${BUILDAH[@]}" from \
@@ -79,8 +82,10 @@ image_status_scan:
         --name "${DOTNET_CONTAINER}" \
         "${DOTNET_IMAGE}"
 
-      "${BUILDAH[@]}" run --isolation chroot "${DOTNET_CONTAINER}" -- \
-        dotnet --version
+      DOTNET_ROOTFS="$("${BUILDAH[@]}" mount "${DOTNET_CONTAINER}")"
+      python3 -c \
+        'import pathlib,sys; versions=[p.name for p in pathlib.Path(sys.argv[1]).iterdir() if p.is_dir() and all(part.isdigit() for part in p.name.split("."))]; print(max(versions, key=lambda value: tuple(map(int, value.split(".")))))' \
+        "${DOTNET_ROOTFS}/usr/share/dotnet/sdk"
 
     - python3 .gitlab/scripts/images/collect_image_status.py
 
